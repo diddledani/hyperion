@@ -1,0 +1,94 @@
+name: Test that hercules successfully builds
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "master"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os:
+        - macos-10.15
+        - macos-11
+        - ubuntu-18.04
+        - ubuntu-20.04
+        compiler:
+        - gcc
+        - clang
+        exclude:
+        - os: ubuntu-20.04
+          compiler: clang
+        include:
+        - os: windows-latest
+      fail-fast: false
+    runs-on: ${{matrix.os}}
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install Ubuntu dependencies
+      if: ${{ runner.os == 'Linux' }}
+      run: |
+        sudo apt-get install -y regina-rexx libregina3-dev
+        sudo apt-get install -y binutils binutils-dev
+
+    - name: Install macOS dependencies
+      if: ${{ runner.os == 'macOS' }}
+      run: |
+        brew install autoconf automake cmake gsed libtool regina-rexx
+
+    - name: Build Linux
+      if: ${{ runner.os == 'Linux' }}
+      run: |
+        if [ "${{ matrix.compiler }}" = "gcc" ]; then
+          export CC="gcc"
+          export CXX=g++
+        else
+          export CC="clang"
+          export CXX="clang++"
+        fi
+        util/bldlvlck
+        ./autogen.sh
+        ./configure --enable-regina-rexx --enable-setuid-hercifc
+        ./config.status --config
+        make -j$(nproc)
+        make check
+
+    - name: Build macOS
+      if: ${{ runner.os == 'macOS' }}
+      run: |
+        if [ "${{ matrix.compiler }}" = "gcc" ]; then
+          export CC="gcc"
+          export CXX=g++
+        else
+          export CC="clang"
+          export CXX="clang++"
+        fi
+        export CFLAGS="-I/usr/local/include -I$(find $(brew --cellar libtool) -type d -name "include" | sort -n | tail -n 1)"
+        export CXXFLAGS="-I/usr/local/include -I$(find $(brew --cellar libtool) -type d -name "include" | sort -n | tail -n 1)"
+        export LDFLAGS="-L/usr/local/lib -L$(find $(brew --cellar libtool) -type d -name "lib" | sort -n | tail -n 1)"
+
+        git clone https://github.com/SDL-Hercules-390/gists.git extpkgs
+        cd ./extpkgs
+        ./extpkgs.sh clone c d s t
+        cd ..
+
+        util/bldlvlck
+        ./autogen.sh
+        ./configure \
+          --enable-optimization="-g -g3 -ggdb3 -O3" \
+          --enable-extpkgs="$PWD/extpkgs" \
+          --enable-regina-rexx \
+          --disable-getoptwrapper
+        ./config.status --config
+        make -j$(sysctl -n hw.physicalcpu)
+        # run tests and output the log if there is an error in the test runner
+        make check || (cat hyperion/allTests.out; exit 1)
+
+    - name: Build Windows
+      if: ${{ runner.os == 'Windows' }}
+      run: ./makefile.bat DEBUG-X64 makefile.msvc 8
